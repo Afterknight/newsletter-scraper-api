@@ -1,32 +1,28 @@
-# main.py 
+# main.py (v8.0 - The Definitive Dual-Engine Version)
 
 import requests
 import re
 import json
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse 
+from fastapi.responses import RedirectResponse
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
 # --- App Definition ---
 app = FastAPI(
     title="Universal Newsletter Scraper API v8",
-    description="A production-grade API that redirects to docs and uses a multi-layered fallback system.",
+    description="A production-grade API with a multi-layered fallback system for both Substack and Beehiiv.",
     version="8.0.0",
 )
 
 # --- CORRECTED ROOT REDIRECT ENDPOINT ---
 @app.get("/", include_in_schema=False)
 async def root_redirect():
-    """
-    Redirects the root URL (/) to the interactive API documentation (/docs).
-    """
     return RedirectResponse(url="/docs")
 
 
-# --- DEFINITIVE SUBSTACK SCRAPER ---
+# --- DEFINITIVE SUBSTACK SCRAPER (Unchanged from v7) ---
 def _scrape_substack_article(soup: BeautifulSoup) -> dict:
-    # This function is now correct from our v7 iteration.
     try:
         author, publication, publication_date = "Author not found", "Publication not found", None
         script_tag = soup.find('script', {'type': 'application/ld+json'})
@@ -81,32 +77,56 @@ def _scrape_substack_article(soup: BeautifulSoup) -> dict:
             "publication_date": publication_date, "full_text": polished_text
         }
     except Exception as e:
-        raise ValueError(f"Failed during parsing. Layout may have changed. Error: {e}")
+        raise ValueError(f"Failed to parse Substack article. Error: {e}")
 
-# ... [The Beehiiv scraper and main endpoint function remain the same] ...
+# --- NEW AND IMPROVED BEEHIIV SCRAPER ---
+
 def _scrape_beehiiv_article(soup: BeautifulSoup) -> dict:
+    """
+    Scrapes a Beehiiv article using the same robust, fallback-driven approach.
+    """
     try:
-        title = soup.select_one('h1').get_text(strip=True)
-        subtitle = None
-        author = soup.select_one('a.text-center.text-sm.font-semibold').get_text(strip=True)
-        publication = urlparse(soup.select_one("link[rel='canonical']")['href']).netloc.split('.')[0]
-        date_element = soup.select_one('time[datetime]')
-        publication_date = date_element['datetime'].split('T')[0] if date_element else None
-        
+        # Initialize defaults
+        title, author, publication, publication_date, subtitle = "Title not found", "Author not found", "beehiiv", None, None
+
+        # Plan A: Parse the clean JSON-LD data
+        script_tag = soup.find('script', {'type': 'application/ld+json'})
+        if script_tag:
+            json_data = json.loads(script_tag.string)
+            title = json_data.get('headline', title)
+            if json_data.get('author') and isinstance(json_data['author'], list):
+                author = json_data['author'][0].get('name', author)
+            publication = json_data.get('publisher', {}).get('name', publication)
+            publication_date = json_data.get('datePublished', publication_date)
+            if publication_date:
+                publication_date = publication_date.split('T')[0]
+
+        # Plan B: Fallback to HTML scraping if JSON-LD fails or is incomplete
+        if title == "Title not found":
+            title_element = soup.select_one('h1')
+            if title_element: title = title_element.get_text(strip=True)
+        if author == "Author not found":
+            author_element = soup.select_one('a[href*="/authors/"]')
+            if author_element: author = author_element.get_text(strip=True)
+
+        # Content extraction with iterative cleaning
         content_body = soup.select_one('div.prose')
-        if not content_body: raise ValueError("Main content body (`div.prose`) not found.")
+        if not content_body:
+            raise ValueError("Main content body (`div.prose`) not found.")
             
         text_blocks = [el.get_text(strip=True).replace('\n', ' ') for el in content_body.select('p, h1, h2, h3, li') if el.get_text(strip=True)]
         polished_text = '\n\n'.join(text_blocks)
         
         return {
-            "publication_name": publication.capitalize(), "article_title": title,
+            "publication_name": publication, "article_title": title,
             "article_subtitle": subtitle, "author": author, "publication_date": publication_date,
             "full_text": polished_text
         }
     except Exception as e:
-        raise ValueError(f"Failed to parse Beehiiv article. Error: {e}")
+        raise ValueError(f"Failed to parse Beehiiv article. The website layout may be different. Error: {e}")
 
+
+# --- MAIN API ENDPOINT (Dispatcher) ---
 @app.get("/v1/article-content")
 async def get_article_content(url: str):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
