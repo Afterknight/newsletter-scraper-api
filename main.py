@@ -21,61 +21,91 @@ async def root_redirect():
     return RedirectResponse(url="/docs")
 
 
-# --- DEFINITIVE SUBSTACK SCRAPER (Unchanged from v7) ---
 def _scrape_substack_article(soup: BeautifulSoup) -> dict:
     try:
         author, publication, publication_date = "Author not found", "Publication not found", None
+
+        # --- PRIMARY: JSON-LD block ---
         script_tag = soup.find('script', {'type': 'application/ld+json'})
         if script_tag:
-            json_data = json.loads(script_tag.string)
-            if '@graph' in json_data:
-                for item in json_data['@graph']:
-                    if item.get('@type') == 'NewsArticle':
-                        author = item.get('author', {}).get('name', author)
-                        publication = item.get('publisher', {}).get('name', publication)
-                        publication_date = item.get('datePublished', publication_date).split('T')[0] if item.get('datePublished') else None
-                        break
-        if author == "Author not found":
-            byline_container = soup.select_one('div.pencraft-card-meta-row')
-            if byline_container:
-                author_element = byline_container.select_one('a.pencraft-card-meta-row-owner-name')
-                if author_element: author = author_element.get_text(strip=True)
-        if publication == "Publication not found":
-             byline_container = soup.select_one('div.pencraft-card-meta-row')
-             if byline_container:
-                publication_element = byline_container.select_one('a.pencraft-card-meta-row-publication-name')
-                if publication_element: publication = publication_element.get_text(strip=True)
-        if not publication_date:
-            date_container = soup.select_one('div[aria-label="Post UFI"]')
-            if date_container:
-                date_element = date_container.select_one('div.pencraft.pc-reset.color-pub-secondary-text-hGQ02T')
-                if date_element: publication_date = date_element.get_text(strip=True)
+            try:
+                json_data = json.loads(script_tag.string)
+                if '@graph' in json_data:
+                    for item in json_data['@graph']:
+                        if item.get('@type') == 'NewsArticle':
+                            author = item.get('author', {}).get('name', author)
+                            publication = item.get('publisher', {}).get('name', publication)
+                            publication_date = item.get('datePublished', publication_date)
+                            if publication_date:
+                                publication_date = publication_date.split('T')[0]
+                            break
+            except Exception:
+                pass  # silently skip malformed JSON
 
-        title_element = soup.select_one('h1.post-title')
-        title = title_element.get_text(strip=True) if title_element else "Title not found"
-        subtitle_element = soup.select_one('h3.subtitle')
-        subtitle = subtitle_element.get_text(strip=True) if subtitle_element else None
-        
+        # --- SECONDARY: HTML META TAGS ---
+        if author == "Author not found":
+            meta_author = soup.find("meta", attrs={"name": "author"})
+            if meta_author and meta_author.get("content"):
+                author = meta_author["content"].strip()
+
+        if publication == "Publication not found":
+            og_site = soup.find("meta", attrs={"property": "og:site_name"})
+            if og_site and og_site.get("content"):
+                publication = og_site["content"].strip()
+
+        if not publication_date:
+            pub_date_tag = soup.find("meta", attrs={"property": "article:published_time"})
+            if pub_date_tag and pub_date_tag.get("content"):
+                publication_date = pub_date_tag["content"].split("T")[0]
+
+        # --- THIRD: DOM Elements as fallback ---
+        if author == "Author not found":
+            byline = soup.select_one('div.pencraft-card-meta-row a.pencraft-card-meta-row-owner-name')
+            if byline:
+                author = byline.get_text(strip=True)
+
+        if publication == "Publication not found":
+            pub = soup.select_one('div.pencraft-card-meta-row a.pencraft-card-meta-row-publication-name')
+            if pub:
+                publication = pub.get_text(strip=True)
+
+        if not publication_date:
+            date_container = soup.select_one('div[aria-label="Post UFI"] div.color-pub-secondary-text-hGQ02T')
+            if date_container:
+                publication_date = date_container.get_text(strip=True)
+
+        # --- Title and subtitle ---
+        title = soup.select_one('h1.post-title')
+        subtitle = soup.select_one('h3.subtitle')
+        title = title.get_text(strip=True) if title else "Title not found"
+        subtitle = subtitle.get_text(strip=True) if subtitle else None
+
+        # --- Content parsing ---
         content_body = soup.select_one('div.body.markup')
-        if not content_body: raise ValueError("Main content body not found.")
-        
-        clutter_selectors = [
+        if not content_body:
+            raise ValueError("Main content body not found.")
+
+        # Clean up clutter
+        for selector in [
             'div.subscription-widget-wrap', 'div.captioned-image-container',
             'div.community-chat', 'p.button-wrapper', 'div.pullquote', 'hr',
             '.instagram', '.like-button-container', '.post-ufi-comment-button'
-        ]
-        for selector in clutter_selectors:
-            for element in content_body.select(selector):
-                element.decompose()
-        
+        ]:
+            for el in content_body.select(selector):
+                el.decompose()
+
         text_blocks = [el.get_text(strip=True).replace('\n', ' ') for el in content_body.select('p, h3, li') if el.get_text(strip=True)]
-        polished_text = '\n\n'.join(text_blocks)
+        full_text = '\n\n'.join(text_blocks)
 
         return {
-            "publication_name": publication, "article_title": title,
-            "article_subtitle": subtitle, "author": author,
-            "publication_date": publication_date, "full_text": polished_text
+            "publication_name": publication,
+            "article_title": title,
+            "article_subtitle": subtitle,
+            "author": author,
+            "publication_date": publication_date,
+            "full_text": full_text
         }
+
     except Exception as e:
         raise ValueError(f"Failed to parse Substack article. Error: {e}")
 
