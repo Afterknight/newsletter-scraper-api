@@ -1,6 +1,8 @@
 # main.py (v8.0 - The Definitive Dual-Engine Version)
 
 import requests
+from pydantic import BaseModel
+from typing import List
 import re
 import json
 from fastapi import FastAPI, HTTPException
@@ -14,6 +16,9 @@ app = FastAPI(
     description="A production-grade API with a multi-layered fallback system for both Substack and Beehiiv.",
     version="8.0.0",
 )
+
+class URLBatchRequest(BaseModel):
+    urls: List[str]
 
 # --- CORRECTED ROOT REDIRECT ENDPOINT ---
 @app.get("/", include_in_schema=False)
@@ -182,3 +187,29 @@ async def get_article_content(url: str):
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+
+@app.post("/v1/article-batch")
+async def batch_article_scrape(payload: URLBatchRequest):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    results = []
+
+    for url in payload.urls:
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'html.parser')
+            domain = urlparse(url).netloc
+
+            if "substack.com" in domain:
+                data = _scrape_substack_article(soup)
+            elif "beehiiv.com" in domain:
+                data = _scrape_beehiiv_article(soup)
+            else:
+                raise ValueError("Unsupported platform.")
+
+            results.append({"article_url": url, **data})
+
+        except Exception as e:
+            results.append({"article_url": url, "error": str(e)})
+
+    return {"success": True, "results": results}
