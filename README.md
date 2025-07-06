@@ -1,40 +1,43 @@
-# 📬 Newsletter Scraper API
+# 📬 Universal Newsletter Scraper API
 
-A fast, production-ready API that scrapes full content and metadata from public **Substack** and **Beehiiv** newsletter articles. Returns clean, structured JSON that’s perfect for AI tools, summarizers, dashboards, and searchable databases.
+A fast, production-ready API that scrapes full content and metadata from public **Substack** and **Beehiiv** newsletter articles. Returns clean, structured JSON that's perfect for AI tools, summarizers, dashboards, and searchable databases.
 
 ---
 
 ## 🔥 What This API Does
 
-Send a single GET request with a public newsletter article URL, and get back:
+Send a GET or POST request with public newsletter article URLs, and get back:
 
 - ✅ Title  
 - ✅ Subtitle (if available)  
 - ✅ Author  
 - ✅ Publication name  
 - ✅ Publish date  
-- ✅ Full clean text (ready for AI or display)
+- ✅ Full clean text (ready for AI or display)  
+- 🧠 Optional: **Summarized** version of the article using open-source AI
+
 ---
+
 ## ✅ Supported Platforms
 
 - `substack.com`  
-- `beehiiv.com`
+- `beehiiv.com`  
 
-More platforms will be added later (Ghost, Medium, etc.).
+More platforms coming soon (Ghost, Medium, etc.)
 
 ---
 
-## 📥 Getting Started
-
-**Endpoint:**  
-GET /v1/article-content
-
+## 📥 GET /v1/article-content
 
 **Query Parameters:**
 
-| Name | Type   | Required | Description                          |
-|------|--------|----------|--------------------------------------|
-| url  | string | Yes      | Full public article URL to scrape    |
+| Name       | Type    | Required | Description                                         |
+|------------|---------|----------|-----------------------------------------------------|
+| url        | string  | Yes      | Full public article URL to scrape                  |
+| summarize  | boolean | No       | If true, returns a summary of the article content  |
+
+
+
 
 **Example Request:**
 GET /v1/article-content?url=https://annanewton.substack.com/p/how-to-be-organised-in-2025
@@ -51,6 +54,7 @@ GET /v1/article-content?url=https://annanewton.substack.com/p/how-to-be-organise
   "author": "Anna Newton",
   "publication_date": "Dec 28, 2024",
   "full_text": "Creating content online for 15 years means I’ve experienced many eras -the ombre..."
+  "summary": "This article covers practical ways to stay organized in 2025, focusing on..."
 }
 ```
 This has many potential uses, creativity depends on the user.
@@ -116,11 +120,12 @@ Send up to 10 URLs per request. Each result is returned individually. Invalid li
 - Only works with Substack and Beehiiv for now
 - Returns plain text only (no images/media)
 
-# 🛠 Status
+# 🛠 Tech Stack
 
-- Live & stable on Vercel
-- JSON outputs are optimized for parsing or AI pipelines
-- Built with FastAPI, BeautifulSoup, and fallback scraping logic
+- FastAPI + BeautifulSoup + Requests
+- Hosted on Vercel
+- Summarization via Hugging Face Inference API
+- Optional summarization using open-source models (like Gemma-3-27B-Instruct)
 
 # 📬 Contact
 Need more platforms supported?
