@@ -1,9 +1,8 @@
-# main.py (v8.0 - The Definitive Dual-Engine Version)
+# main.py (v8.1 - Added Stats to Article Output)
 
 import requests
 from pydantic import BaseModel
 from typing import List
-import re
 import json
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
@@ -12,25 +11,32 @@ from urllib.parse import urlparse
 
 # --- App Definition ---
 app = FastAPI(
-    title="Universal Newsletter Scraper API v8",
-    description="A production-grade API with a multi-layered fallback system for both Substack and Beehiiv.",
-    version="8.0.0",
+    title="Universal Newsletter Scraper API v8.1",
+    description="A production-grade API with batch support, article stats, and dual-engine scraping.",
+    version="8.1.0",
 )
 
 class URLBatchRequest(BaseModel):
     urls: List[str]
 
-# --- CORRECTED ROOT REDIRECT ENDPOINT ---
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     return RedirectResponse(url="/docs")
 
+def _add_article_stats(text_blocks: List[str], full_text: str) -> dict:
+    word_count = len(full_text.split())
+    paragraph_count = len(text_blocks)
+    read_time = round(word_count / 200, 1)  # 200 WPM estimate
+    return {
+        "word_count": word_count,
+        "paragraph_count": paragraph_count,
+        "estimated_read_time_minutes": read_time
+    }
 
 def _scrape_substack_article(soup: BeautifulSoup) -> dict:
     try:
         author, publication, publication_date = "Author not found", "Publication not found", None
 
-        # --- PRIMARY: JSON-LD block ---
         script_tag = soup.find('script', {'type': 'application/ld+json'})
         if script_tag:
             try:
@@ -45,9 +51,8 @@ def _scrape_substack_article(soup: BeautifulSoup) -> dict:
                                 publication_date = publication_date.split('T')[0]
                             break
             except Exception:
-                pass  # silently skip malformed JSON
+                pass
 
-        # --- SECONDARY: HTML META TAGS ---
         if author == "Author not found":
             meta_author = soup.find("meta", attrs={"name": "author"})
             if meta_author and meta_author.get("content"):
@@ -63,34 +68,15 @@ def _scrape_substack_article(soup: BeautifulSoup) -> dict:
             if pub_date_tag and pub_date_tag.get("content"):
                 publication_date = pub_date_tag["content"].split("T")[0]
 
-        # --- THIRD: DOM Elements as fallback ---
-        if author == "Author not found":
-            byline = soup.select_one('div.pencraft-card-meta-row a.pencraft-card-meta-row-owner-name')
-            if byline:
-                author = byline.get_text(strip=True)
-
-        if publication == "Publication not found":
-            pub = soup.select_one('div.pencraft-card-meta-row a.pencraft-card-meta-row-publication-name')
-            if pub:
-                publication = pub.get_text(strip=True)
-
-        if not publication_date:
-            date_container = soup.select_one('div[aria-label="Post UFI"] div.color-pub-secondary-text-hGQ02T')
-            if date_container:
-                publication_date = date_container.get_text(strip=True)
-
-        # --- Title and subtitle ---
         title = soup.select_one('h1.post-title')
         subtitle = soup.select_one('h3.subtitle')
         title = title.get_text(strip=True) if title else "Title not found"
         subtitle = subtitle.get_text(strip=True) if subtitle else None
 
-        # --- Content parsing ---
         content_body = soup.select_one('div.body.markup')
         if not content_body:
             raise ValueError("Main content body not found.")
 
-        # Clean up clutter
         for selector in [
             'div.subscription-widget-wrap', 'div.captioned-image-container',
             'div.community-chat', 'p.button-wrapper', 'div.pullquote', 'hr',
@@ -101,6 +87,7 @@ def _scrape_substack_article(soup: BeautifulSoup) -> dict:
 
         text_blocks = [el.get_text(strip=True).replace('\n', ' ') for el in content_body.select('p, h3, li') if el.get_text(strip=True)]
         full_text = '\n\n'.join(text_blocks)
+        stats = _add_article_stats(text_blocks, full_text)
 
         return {
             "publication_name": publication,
@@ -108,23 +95,17 @@ def _scrape_substack_article(soup: BeautifulSoup) -> dict:
             "article_subtitle": subtitle,
             "author": author,
             "publication_date": publication_date,
-            "full_text": full_text
+            "full_text": full_text,
+            "stats": stats
         }
 
     except Exception as e:
         raise ValueError(f"Failed to parse Substack article. Error: {e}")
 
-# --- NEW AND IMPROVED BEEHIIV SCRAPER ---
-
 def _scrape_beehiiv_article(soup: BeautifulSoup) -> dict:
-    """
-    Scrapes a Beehiiv article using the same robust, fallback-driven approach.
-    """
     try:
-        # Initialize defaults
         title, author, publication, publication_date, subtitle = "Title not found", "Author not found", "beehiiv", None, None
 
-        # Plan A: Parse the clean JSON-LD data
         script_tag = soup.find('script', {'type': 'application/ld+json'})
         if script_tag:
             json_data = json.loads(script_tag.string)
@@ -136,7 +117,6 @@ def _scrape_beehiiv_article(soup: BeautifulSoup) -> dict:
             if publication_date:
                 publication_date = publication_date.split('T')[0]
 
-        # Plan B: Fallback to HTML scraping if JSON-LD fails or is incomplete
         if title == "Title not found":
             title_element = soup.select_one('h1')
             if title_element: title = title_element.get_text(strip=True)
@@ -144,31 +124,33 @@ def _scrape_beehiiv_article(soup: BeautifulSoup) -> dict:
             author_element = soup.select_one('a[href*="/authors/"]')
             if author_element: author = author_element.get_text(strip=True)
 
-        # Content extraction with iterative cleaning
         content_body = soup.select_one('div.prose')
         if not content_body:
             raise ValueError("Main content body (`div.prose`) not found.")
-            
+
         text_blocks = [el.get_text(strip=True).replace('\n', ' ') for el in content_body.select('p, h1, h2, h3, li') if el.get_text(strip=True)]
-        polished_text = '\n\n'.join(text_blocks)
-        
+        full_text = '\n\n'.join(text_blocks)
+        stats = _add_article_stats(text_blocks, full_text)
+
         return {
-            "publication_name": publication, "article_title": title,
-            "article_subtitle": subtitle, "author": author, "publication_date": publication_date,
-            "full_text": polished_text
+            "publication_name": publication,
+            "article_title": title,
+            "article_subtitle": subtitle,
+            "author": author,
+            "publication_date": publication_date,
+            "full_text": full_text,
+            "stats": stats
         }
     except Exception as e:
-        raise ValueError(f"Failed to parse Beehiiv article. The website layout may be different. Error: {e}")
+        raise ValueError(f"Failed to parse Beehiiv article. Error: {e}")
 
-
-# --- MAIN API ENDPOINT (Dispatcher) ---
 @app.get("/v1/article-content")
 async def get_article_content(url: str):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
-        
+
         soup = BeautifulSoup(response.content, 'html.parser')
         domain = urlparse(url).netloc
 
@@ -186,7 +168,8 @@ async def get_article_content(url: str):
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
 
 @app.post("/v1/article-batch")
 async def batch_article_scrape(payload: URLBatchRequest):
