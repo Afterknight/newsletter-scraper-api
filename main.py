@@ -14,9 +14,9 @@ import textwrap
 load_dotenv()
 
 app = FastAPI(
-    title="Universal Newsletter Scraper API v9.1",
-    description="Now supports summarization, article stats, and batch mode for Substack and Beehiiv.",
-    version="9.1.0",
+    title="Universal Newsletter Scraper API v9.2",
+    description="Now returns more metadata: canonical URL, tags, and inferred category.",
+    version="9.2.0",
 )
 
 class URLBatchRequest(BaseModel):
@@ -58,6 +58,35 @@ def compute_stats(text: str) -> dict:
         "word_count": word_count,
         "paragraph_count": paragraph_count,
         "reading_time_minutes": reading_time_minutes
+    }
+
+def extract_extra_metadata(soup: BeautifulSoup) -> dict:
+    canonical = None
+    tags = []
+    category = None
+
+    tag_meta = soup.find("meta", attrs={"name": "keywords"})
+    if tag_meta and tag_meta.get("content"):
+        tags = [tag.strip() for tag in tag_meta["content"].split(",") if tag.strip()]
+
+    canonical_tag = soup.find("link", rel="canonical")
+    if canonical_tag and canonical_tag.get("href"):
+        canonical = canonical_tag["href"]
+    else:
+        og_url = soup.find("meta", property="og:url")
+        if og_url and og_url.get("content"):
+            canonical = og_url["content"]
+
+    category_meta = soup.find("meta", attrs={"name": "category"})
+    if category_meta and category_meta.get("content"):
+        category = category_meta["content"]
+    elif tags:
+        category = tags[0]
+
+    return {
+        "canonical_url": canonical,
+        "tags": tags,
+        "newsletter_category": category
     }
 
 def _scrape_substack_article(soup: BeautifulSoup) -> dict:
@@ -131,7 +160,8 @@ def _scrape_substack_article(soup: BeautifulSoup) -> dict:
             "author": author,
             "publication_date": publication_date,
             "full_text": full_text,
-            **compute_stats(full_text)
+            **compute_stats(full_text),
+            **extract_extra_metadata(soup)
         }
 
     except Exception as e:
@@ -172,7 +202,8 @@ def _scrape_beehiiv_article(soup: BeautifulSoup) -> dict:
             "author": author,
             "publication_date": publication_date,
             "full_text": polished_text,
-            **compute_stats(polished_text)
+            **compute_stats(polished_text),
+            **extract_extra_metadata(soup)
         }
     except Exception as e:
         raise ValueError(f"Failed to parse Beehiiv article. Error: {e}")
